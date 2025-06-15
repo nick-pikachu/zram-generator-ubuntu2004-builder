@@ -22,7 +22,6 @@ jobs:
 
     steps:
       # Step 1: Checkout YOUR workflow repository (where this workflow file lives)
-      # This is automatically done by actions/checkout@v4 at the root of the workspace.
       - name: Checkout Workflow Repository
         uses: actions/checkout@v4
 
@@ -46,6 +45,8 @@ jobs:
             const owner = 'systemd';
             const repo = 'systemd-zram-generator';
             const run_id = 9243760431; // *** CRITICAL: REPLACE THIS WITH A REAL workflow_run_id ***
+                                    // Example: Go to https://github.com/systemd/systemd-zram-generator/actions
+                                    // Pick a "CI" run, click it, and get the ID from the URL (e.g., .../runs/123456789)
 
             console.log(`Fetching workflow run artifacts for run_id: ${run_id}`);
             const artifacts = await repos.listWorkflowRunArtifacts({ owner, repo, run_id });
@@ -72,17 +73,14 @@ jobs:
             core.setOutput('artifact_downloaded', 'true');
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # The working-directory applies to the entire step, not inside 'with'.
-        # For actions/github-script, operations happen relative to GITHUB_WORKSPACE
-        # unless explicitly changed within the script itself (e.g., process.chdir()).
-        # Thus, working-directory on this step is not needed or relevant if all paths
-        # are absolute or relative to GITHUB_WORKSPACE.
+        # working-directory is NOT used with 'uses:' actions/github-script.
+        # All path operations within the 'script:' must be absolute or relative to GITHUB_WORKSPACE.
 
       # Step 4: Extract the downloaded artifact or fallback to git clone if no artifact was downloaded
       - name: Extract Artifact or Fallback to Git Clone
         # This step runs after the github-script step.
         # It checks if the artifact was downloaded or falls back to git clone.
-        working-directory: ${{ github.workspace }} # Ensure this step runs from the workspace root
+        working-directory: ${{ github.workspace }} # <-- Correctly indented at step level
         run: |
           EXTRACT_DIR="systemd-zram-generator-source" # Target directory for source
           mkdir -p "$EXTRACT_DIR" # Ensure target directory exists
@@ -90,7 +88,6 @@ jobs:
           # Check if the previous step successfully downloaded an artifact
           if [ "${{ steps.download_source.outputs.artifact_downloaded }}" == "true" ]; then
             echo "Artifact ZIP should be in the workspace. Extracting..."
-            # Find the downloaded zip file (actions/github-script names it after the artifact ID usually)
             DOWNLOADED_ZIP=$(find ${{ github.workspace }} -maxdepth 1 -name "*.zip" -print -quit)
             if [ -z "$DOWNLOADED_ZIP" ]; then
               echo "ERROR: Downloaded artifact ZIP file not found! Aborting."
@@ -138,7 +135,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:Final Check - List Contents of systemd-zram-generator-source
+      - name: Debug: Final Check - List Contents of systemd-zram-generator-source
         working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
@@ -167,12 +164,9 @@ jobs:
 
       - name: Find .deb package
         id: find_deb
-        working-directory: ${{ github.workspace }} # Find from workspace root
+        working-directory: ${{ github.workspace }}
         run: |
-          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
-          # Since working-directory for Create Debian Package is './systemd-zram-generator-source',
-          # the .deb will be in the root of the runner's workspace.
-          DEB_FILE=$(find . -maxdepth 1 -name "systemd-zram-generator_*.deb" -print -quit) # Search only in current dir (workspace root)
+          DEB_FILE=$(find . -maxdepth 1 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found in root workspace! Aborting."
             exit 1
