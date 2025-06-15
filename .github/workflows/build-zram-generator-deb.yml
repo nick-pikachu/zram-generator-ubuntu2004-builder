@@ -21,32 +21,57 @@ jobs:
       options: --user root # Ensure commands run as root inside the container
 
     steps:
-      # Step 1: Checkout YOUR workflow repository (where this workflow file lives)
+      # Step 1: Checkout YOUR workflow repository (this is always implicitly done by actions/checkout)
+      # This ensures your workflow file itself is available.
       - name: Checkout Workflow Repository
         uses: actions/checkout@v4
-        # No 'path:' needed here, this checks out the workflow repo to GITHUB_WORKSPACE
+        # No 'path:' needed here; it checks out to the default workspace root.
 
-      # Step 2: Clone the systemd/systemd-zram-generator C source using actions/checkout
-      # Explicitly set the repository and path, and use a specific tag for stability.
-      - name: Clone Canonical systemd-zram-generator C source
-        uses: actions/checkout@v4
-        with:
-          repository: systemd/systemd-zram-generator # Canonical repository name
-          ref: v2.0.0 # Use a specific release tag for stability (latest seems to be v2.0.0)
-          path: systemd-zram-generator-source        # Clone into this subdirectory
-          token: ${{ secrets.GITHUB_TOKEN }}         # Use the built-in token for authentication
-          fetch-depth: 1 # Only fetch the latest commit to speed up cloning
+      # Step 2: Install Git (and other essential tools) globally in the container
+      # This MUST happen before any git clone operations.
+      - name: Install Git and Core Tools in Container
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update -y
+          apt install -y git wget tar unzip # Ensure git, wget, tar, unzip are installed
+          apt clean
+          rm -rf /var/lib/apt/lists/*
+          # Crucial for git operations on mounted volumes in containers
+          git config --global --add safe.directory /__w/${{ github.repository }}/${{ github.repository }}
 
-      - name: Install Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
+      # Step 3: Explicitly clone the systemd/systemd-zram-generator C source using direct git clone.
+      # This bypasses the GitHub REST API and actions/checkout's internal mechanisms for external repos.
+      - name: Clone Canonical systemd-zram-generator C source via Git
+        run: |
+          # Clean up any potential previous clone attempts or debris
+          rm -rf ./systemd-zram-generator-source || true
+
+          # Clone the repository directly
+          # Using depth 1 for faster cloning as we only need the latest state
+          git clone --depth 1 https://github.com/systemd/systemd-zram-generator.git systemd-zram-generator-source
+
+          # Verify contents immediately after cloning
+          echo "Contents of cloned source directory (systemd-zram-generator-source):"
+          ls -lF ./systemd-zram-generator-source
+          
+          if [ ! -f "./systemd-zram-generator-source/meson.build" ]; then
+            echo "ERROR: meson.build NOT found in cloned directory! Contents of directory:"
+            ls -lF ./systemd-zram-generator-source
+            echo "Attempted to clone: https://github.com/systemd/systemd-zram-generator.git"
+            echo "This is critically unexpected. Aborting."
+            exit 1
+          fi
+        working-directory: ${{ github.workspace }} # Perform clone from the workspace root
+
+      - name: Install Remaining Build Dependencies (Non-interactive)
         # These dependencies are for the zram-generator project itself.
-        # This step now operates within the newly cloned 'systemd-zram-generator-source' directory.
         working-directory: ./systemd-zram-generator-source
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          export TZ="Etc/UTC" # Set default timezone to prevent interactive prompts
+          export TZ="Etc/UTC"
 
           apt update -y
-          # actions/checkout handles git, install other build tools.
+          # Git is already installed.
           apt install -y tzdata build-essential meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
@@ -55,17 +80,17 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:List Contents of systemd-zram-generator-source
-        working-directory: ./systemd-zram-generator-source # Verify files are here
+      - name: Debug:Final Check - List Contents of systemd-zram-generator-source
+        working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
-          echo "Contents of ./systemd-zram-generator-source:"
+          echo "Contents of ./systemd-zram-generator-source (FINAL CHECK):"
           ls -lF
           echo "Full recursive listing:"
           ls -lR . 
 
       - name: Configure and Build Project
-        working-directory: ./systemd-zram-generator-source # Meson should find meson.build here
+        working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory for Meson setup: $(pwd)"
           if [ ! -f "meson.build" ]; then
@@ -73,23 +98,18 @@ jobs:
             ls -lF .
             exit 1
           fi
-          meson setup . build --prefix=/usr # Explicitly tell meson source is '.' and build dir is 'build'
+          meson setup . build --prefix=/usr
           ninja -C build
 
       - name: Create Debian Package
-        working-directory: ./systemd-zram-generator-source # dpkg-buildpackage operates here
+        working-directory: ./systemd-zram-generator-source
         run: |
-          # dch requires a debian/changelog to exist. The source tarball should have it.
-          # If it errors out here, it means the debian/ directory is missing or malformed.
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
           dpkg-buildpackage -b -us -uc
 
       - name: Find .deb package
         id: find_deb
         run: |
-          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
-          # Since working-directory for Create Debian Package is './systemd-zram-generator-source',
-          # the .deb will be in the root of the runner's workspace.
           DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found in root workspace! Trying source dir as fallback."
