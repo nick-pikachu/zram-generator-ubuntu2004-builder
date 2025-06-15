@@ -33,11 +33,16 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           # Also set a default timezone to prevent tzdata from asking
           export TZ="Etc/UTC"
+
+          apt update -y
+          # Install tzdata first to ensure it's present for reconfigure
+          # Then install other build dependencies
+          apt install -y tzdata build-essential git meson ninja-build pkg-config libsystemd-dev debhelper devscripts
+          
+          # Now reconfigure tzdata in non-interactive mode after it's installed
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
           dpkg-reconfigure -f noninteractive tzdata
 
-          apt update -y
-          apt install -y build-essential git meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           apt clean
           rm -rf /var/lib/apt/lists/*
 
@@ -50,11 +55,7 @@ jobs:
       - name: Create Debian Package
         working-directory: ./zram-generator-source
         run: |
-          # Ensure changelog is updated for the build process (important for dpkg-buildpackage)
-          # GITHUB_RUN_NUMBER is available in the runner environment
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
-
-          # Build the Debian package
           dpkg-buildpackage -b -us -uc
 
       - name: Find .deb package
