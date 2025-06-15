@@ -53,7 +53,7 @@ jobs:
           echo "Contents of parent directory (root workspace):"
           ls -lF ../
           echo "Full recursive listing of zram-generator-source:"
-          ls -lR . # This is the line that was reported
+          ls -lR . 
 
       - name: Configure and Build Project
         working-directory: ./zram-generator-source # Ensure this is correct
