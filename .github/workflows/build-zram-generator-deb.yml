@@ -41,14 +41,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Correct API path is github.rest.actions
-            const { actions } = github.rest;
+            const { actions } = github.rest; // Correct API path
             const owner = 'systemd';
             const repo = 'systemd-zram-generator';
             const run_id = 9243760431; // *** CRITICAL: REPLACE THIS WITH A REAL workflow_run_id ***
 
             console.log(`Fetching workflow run artifacts for run_id: ${run_id}`);
-            // Correct function call
             const artifacts = await actions.listWorkflowRunArtifacts({ owner, repo, run_id });
 
             if (!artifacts.data.artifacts || artifacts.data.artifacts.length === 0) {
@@ -64,7 +62,6 @@ jobs:
             const artifactToDownload = sourceArtifact || artifacts.data.artifacts[0]; // Fallback to first if specific not found
 
             console.log(`Downloading artifact: ${artifactToDownload.name} (ID: ${artifactToDownload.id})`);
-            // Correct function call for downloading artifact
             const download = await actions.downloadArtifact({
               owner,
               repo,
@@ -72,11 +69,14 @@ jobs:
               archive_format: 'zip',
             });
             core.setOutput('artifact_downloaded', 'true');
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The 'env' block must be at the same level as 'id' and 'uses', not nested under 'with'.
+          # This has been the persistent error. It's now moved to the correct level.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Correct indentation: env is a property of the step
 
       # Step 4: Extract the downloaded artifact or fallback to git clone if no artifact was downloaded
       - name: Extract Artifact or Fallback to Git Clone
+        # working-directory for this 'run' step should be at the same level as 'name'.
         working-directory: ${{ github.workspace }}
         run: |
           EXTRACT_DIR="systemd-zram-generator-source" # Target directory for source
@@ -129,7 +129,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:Final Check - List Contents of systemd-zram-generator-source
+      - name: Debug: Final Check - List Contents of systemd-zram-generator-source
         working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
