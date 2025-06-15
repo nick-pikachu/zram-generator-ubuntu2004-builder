@@ -73,14 +73,15 @@ jobs:
             core.setOutput('artifact_downloaded', 'true');
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # working-directory is NOT used with 'uses:' actions/github-script.
-        # All path operations within the 'script:' must be absolute or relative to GITHUB_WORKSPACE.
+        # The 'working-directory' key applies to the step itself, not within 'with'.
+        # For 'actions/github-script', its internal operations are relative to GITHUB_WORKSPACE.
 
       # Step 4: Extract the downloaded artifact or fallback to git clone if no artifact was downloaded
       - name: Extract Artifact or Fallback to Git Clone
         # This step runs after the github-script step.
         # It checks if the artifact was downloaded or falls back to git clone.
-        working-directory: ${{ github.workspace }} # <-- Correctly indented at step level
+        # working-directory for this 'run' step should be at the same level as 'name'.
+        working-directory: ${{ github.workspace }}
         run: |
           EXTRACT_DIR="systemd-zram-generator-source" # Target directory for source
           mkdir -p "$EXTRACT_DIR" # Ensure target directory exists
@@ -88,7 +89,7 @@ jobs:
           # Check if the previous step successfully downloaded an artifact
           if [ "${{ steps.download_source.outputs.artifact_downloaded }}" == "true" ]; then
             echo "Artifact ZIP should be in the workspace. Extracting..."
-            DOWNLOADED_ZIP=$(find ${{ github.workspace }} -maxdepth 1 -name "*.zip" -print -quit)
+            DOWNLOADED_ZIP=$(find . -maxdepth 1 -name "*.zip" -print -quit) # Search in current dir (workspace root)
             if [ -z "$DOWNLOADED_ZIP" ]; then
               echo "ERROR: Downloaded artifact ZIP file not found! Aborting."
               exit 1
@@ -164,7 +165,7 @@ jobs:
 
       - name: Find .deb package
         id: find_deb
-        working-directory: ${{ github.workspace }}
+        working-directory: ${{ github.workspace }} # Find from workspace root
         run: |
           DEB_FILE=$(find . -maxdepth 1 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
