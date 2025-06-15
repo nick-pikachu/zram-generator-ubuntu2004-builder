@@ -1,20 +1,24 @@
 # .github/workflows/build-zram-generator-deb.yml
+# This workflow compiles the upstream systemd-zram-generator C project
+# and packages it into a .deb file specifically for Ubuntu 20.04.
+# It uses a newer GitHub Actions runner (ubuntu-latest) but performs the build
+# inside a Docker container running Ubuntu 20.04 to ensure compatibility.
 name: Build systemd-zram-generator .deb (Ubuntu 20.04 Target)
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
 
 jobs:
   build_deb:
     name: Build .deb for Ubuntu 20.04 Target
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Use the latest supported Ubuntu runner
 
     container:
-      image: ubuntu:20.04
-      options: --user root
+      image: ubuntu:20.04 # Run all steps inside an Ubuntu 20.04 Docker container
+      options: --user root # Ensure commands run as root inside the container
 
     steps:
       - name: Checkout systemd-zram-generator source
@@ -24,15 +28,17 @@ jobs:
           path: zram-generator-source # Clones into this subdirectory
 
       - name: Install Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
-        # All commands in this step now run inside the 'zram-generator-source' directory
-        working-directory: ./zram-generator-source
+        working-directory: ./zram-generator-source # All commands in this step run inside this directory
         run: |
+          # Set DEBIAN_FRONTEND to noninteractive to prevent interactive prompts
           export DEBIAN_FRONTEND=noninteractive
+          # Also set a default timezone to prevent tzdata from asking
           export TZ="Etc/UTC"
 
           apt update -y
           apt install -y tzdata build-essential git meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
+          # Reconfigure tzdata in non-interactive mode after it's installed
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
           dpkg-reconfigure -f noninteractive tzdata
 
@@ -40,24 +46,23 @@ jobs:
           rm -rf /var/lib/apt/lists/*
 
       - name: Debug: List Workspace Contents Before Build
-        # This will show us exactly what's in the directory before meson runs
-        working-directory: ./zram-generator-source # Still operate in the source directory
+        working-directory: ./zram-generator-source # Ensure this is correct
         run: |
           echo "Contents of current working directory (./zram-generator-source):"
           ls -lF
           echo "Contents of parent directory (root workspace):"
           ls -lF ../
           echo "Full recursive listing of zram-generator-source:"
-          ls -lR .
+          ls -lR . # This is the line that was reported
 
       - name: Configure and Build Project
-        working-directory: ./zram-generator-source # This should be correct if source is there
+        working-directory: ./zram-generator-source # Ensure this is correct
         run: |
           meson setup build --prefix=/usr
           ninja -C build
 
       - name: Create Debian Package
-        working-directory: ./zram-generator-source # This should be correct
+        working-directory: ./zram-generator-source # Ensure this is correct
         run: |
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
           dpkg-buildpackage -b -us -uc
@@ -65,15 +70,22 @@ jobs:
       - name: Find .deb package
         id: find_deb
         run: |
-          # After dpkg-buildpackage, the .deb is typically generated in the parent directory
-          # of where dpkg-buildpackage was invoked. Since it's run in ./zram-generator-source,
-          # the .deb should be in the root of the workspace.
+          # The .deb package is usually created one directory up from where dpkg-buildpackage was run.
+          # Since dpkg-buildpackage runs in './zram-generator-source', the .deb should be in the
+          # root of the workspace.
           # The workspace root inside a container is typically /__w/<repo_name>/<repo_name>/
-          # Let's search from the expected root of the workspace.
-          DEB_FILE=$(find /__w/${{ github.repository }} -maxdepth 2 -name "*.deb" -print -quit)
+          DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found in expected paths!"
-            exit 1
+            # Fallback for older dpkg-buildpackage behavior or different repo layouts
+            DEB_FILE=$(find /__w/${{ github.repository }}/zram-generator-source/ -name "*.deb" -print -quit)
+            if [ -z "$DEB_FILE" ]; then
+              echo "Error: .deb file not found anywhere within zram-generator-source!"
+              exit 1
+            fi
+            echo "Found .deb in zram-generator-source subdirectory."
+          else
+            echo "Found .deb in root workspace."
           fi
           echo "deb_file=$DEB_FILE" >> $GITHUB_OUTPUT
 
