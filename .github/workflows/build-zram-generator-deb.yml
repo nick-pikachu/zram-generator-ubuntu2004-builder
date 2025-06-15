@@ -30,7 +30,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt update -y
-          apt install -y wget tar # Install wget, tar
+          apt install -y wget tar
           apt clean
           rm -rf /var/lib/apt/lists/*
 
@@ -38,15 +38,15 @@ jobs:
       - name: Download and Extract Canonical systemd-zram-generator C source
         run: |
           # The correct repository is systemd/systemd-zram-generator
-          # Using 'main' branch tarball.
-          SOURCE_URL="https://github.com/systemd/systemd-zram-generator/archive/refs/heads/main.tar.gz"
-          TAR_FILE="systemd-zram-generator-main.tar.gz"
+          # Correct URL for downloading main branch tarball from GitHub
+          SOURCE_URL="https://codeload.github.com/systemd/systemd-zram-generator/tar.gz/main"
+          TAR_FILE="systemd-zram-generator-main.tar.gz" # Name the downloaded file
           EXTRACT_DIR="systemd-zram-generator-source" # Directory where the source will be extracted
 
           echo "Downloading $SOURCE_URL..."
           wget -O "$TAR_FILE" "$SOURCE_URL"
           echo "Extracting $TAR_FILE to $EXTRACT_DIR..."
-          # The tarball extracts into a directory like systemd-zram-generator-main/, so we move its contents
+          # The tarball extracts into a directory like systemd-systemd-zram-generator-main/, so we strip components
           mkdir -p "$EXTRACT_DIR"
           tar -xzf "$TAR_FILE" -C "$EXTRACT_DIR" --strip-components=1
           
@@ -54,7 +54,7 @@ jobs:
           echo "Contents of extracted source directory ($EXTRACT_DIR):"
           ls -lF "$EXTRACT_DIR"
           if [ ! -f "$EXTRACT_DIR/meson.build" ]; then
-            echo "ERROR: meson.build still not found after wget/extract! This is unexpected. Exiting."
+            echo "ERROR: meson.build still not found after wget/extract! This is critically unexpected. Exiting."
             exit 1
           fi
         working-directory: ${{ github.workspace }} # Ensure operations happen from the workspace root
@@ -66,7 +66,6 @@ jobs:
           export TZ="Etc/UTC" # Set default timezone to prevent interactive prompts
 
           apt update -y
-          # wget, tar are already installed.
           apt install -y tzdata build-essential meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
@@ -105,9 +104,10 @@ jobs:
       - name: Find .deb package
         id: find_deb
         run: |
-          # The .deb package is usually created one directory up from where dpkg-buildpackage was invoked.
+          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
           # Since working-directory for Create Debian Package is './systemd-zram-generator-source',
           # the .deb will be in the root of the runner's workspace.
+          # The workspace root inside container is typically /__w/<org>/<repo>/
           DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found in root workspace! Trying source dir as fallback."
