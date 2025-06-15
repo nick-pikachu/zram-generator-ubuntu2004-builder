@@ -1,0 +1,75 @@
+# .github/workflows/build-zram-generator-deb.yml
+# This workflow compiles the upstream systemd-zram-generator C project
+# and packages it into a .deb file for Ubuntu 20.04.
+name: Build systemd-zram-generator .deb (Ubuntu 20.04)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
+
+jobs:
+  build_deb:
+    name: Build .deb for Ubuntu 20.04
+    runs-on: ubuntu-20.04 # Explicitly set to Ubuntu 20.04 to match your server
+
+    steps:
+      - name: Checkout systemd-zram-generator source
+        # This step clones the official systemd-zram-generator repository.
+        # If you've forked it, replace the 'repository' value with your fork's path
+        # (e.g., 'your_username/zram-generator').
+        uses: actions/checkout@v4
+        with:
+          repository: systemd/zram-generator # Clones the original upstream project
+          path: zram-generator-source        # Clones into a subdirectory
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt update
+          # Essential tools for compiling C projects and building Debian packages
+          sudo apt install -y build-essential git meson ninja-build pkg-config libsystemd-dev debhelper devscripts
+
+      - name: Configure and Build Project
+        working-directory: ./zram-generator-source # Work inside the cloned source directory
+        run: |
+          # Configure the build system (Meson)
+          # --prefix=/usr ensures it installs to standard system paths later on
+          meson setup build --prefix=/usr
+
+          # Compile the project using Ninja
+          ninja -C build
+
+      - name: Create Debian Package
+        # This step uses the 'debian/' directory from the cloned source
+        # to build the .deb package.
+        # -b: binary-only build (no source package).
+        # -us: skip signing the source package.
+        # -uc: skip signing the .deb package (suitable for internal/private builds).
+        working-directory: ./zram-generator-source
+        run: |
+          # Ensure changelog is updated for the build process (important for dpkg-buildpackage)
+          dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
+
+          # Build the Debian package
+          dpkg-buildpackage -b -us -uc
+
+      - name: Find .deb package
+        id: find_deb
+        run: |
+          # The .deb package is usually created one directory up from the build directory,
+          # or in the parent of the directory where dpkg-buildpackage was run.
+          # We'll search the workspace for it.
+          DEB_FILE=$(find ${{ github.workspace }} -name "*.deb" -print -quit)
+          if [ -z "$DEB_FILE" ]; then
+            echo "Error: .deb file not found!"
+            exit 1
+          fi
+          echo "deb_file=$DEB_FILE" >> $GITHUB_OUTPUT
+
+      - name: Upload Debian Package as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemd-zram-generator-ubuntu2004-deb
+          path: ${{ steps.find_deb.outputs.deb_file }}
+          retention-days: 7 # Keep the artifact for 7 days
