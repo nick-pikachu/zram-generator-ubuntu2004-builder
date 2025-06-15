@@ -138,7 +138,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug: Final Check - List Contents of systemd-zram-generator-source
+      - name: Debug:Final Check - List Contents of systemd-zram-generator-source
         working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
