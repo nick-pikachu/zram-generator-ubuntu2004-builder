@@ -22,50 +22,51 @@ jobs:
 
     steps:
       # Step 1: Checkout YOUR workflow repository (where this workflow file lives)
-      # This is automatically done by actions/checkout@v4 at the root of the workspace.
       - name: Checkout Workflow Repository
         uses: actions/checkout@v4
         # No 'path:' needed here; it checks out to the default workspace root.
 
-      # Step 2: Download the source code from a *previous successful run* of systemd/systemd-zram-generator's CI
-      # This completely bypasses direct git clone or wget for the source.
-      - name: Download systemd-zram-generator Source from Previous Build
-        uses: actions/github-script@v7 # Use github-script to call API for artifact download
+      # Step 2: Install core tools needed for downloading and extracting (unzip, etc.)
+      - name: Install Core Tools (unzip, git - for potential fallback) in Container
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update -y
+          apt install -y unzip git # Install unzip for artifacts, git for fallback
+          apt clean
+          rm -rf /var/lib/apt/lists/*
+          # Ensure git is configured for safe directories if it needs to be used (e.g. for fallback)
+          git config --global --add safe.directory /__w/${{ github.repository }}/${{ github.repository }}
+
+      # Step 3: Download the source code from a *previous successful run* of systemd/systemd-zram-generator's CI
+      - name: Download systemd-zram-generator Source from Previous Build (using API)
+        uses: actions/github-script@v7
         id: download_source
         with:
           script: |
             const { repos } = github.rest;
             const owner = 'systemd';
             const repo = 'systemd-zram-generator';
-            const run_id = 9243760431; # <-- *** REPLACE THIS WITH A REAL workflow_run_id from their Actions page ***
-                                    # Example: Go to https://github.com/systemd/systemd-zram-generator/actions
-                                    # Pick a "CI" run, click it, and get the ID from the URL (e.g., .../runs/123456789)
+            const run_id = 9243760431; // <-- *** REPLACE THIS WITH A REAL workflow_run_id from their Actions page ***
+                                    // Example: Go to https://github.com/systemd/systemd-zram-generator/actions
+                                    // Pick a "CI" run, click it, and get the ID from the URL (e.g., .../runs/123456789)
 
             console.log(`Fetching workflow run artifacts for run_id: ${run_id}`);
             const artifacts = await repos.listWorkflowRunArtifacts({ owner, repo, run_id });
 
             if (!artifacts.data.artifacts || artifacts.data.artifacts.length === 0) {
-              console.log('No artifacts found for this run. Trying to clone directly as fallback.');
-              // FALLBACK: If no artifacts, try direct git clone as a last resort
-              // This is what we tried before, but putting it here if artifacts fail.
-              await exec.exec('apt update -y');
-              await exec.exec('apt install -y git');
-              await exec.exec('git', ['config', '--global', '--add', 'safe.directory', process.env.GITHUB_WORKSPACE]);
-              await exec.exec('git', ['clone', '--depth', '1', 'https://github.com/systemd/systemd-zram-generator.git', 'systemd-zram-generator-source']);
-              if (!fs.existsSync('systemd-zram-generator-source/meson.build')) {
-                throw new Error('Fallback clone also failed to find meson.build');
-              }
+              console.log('No artifacts found for this run. Script will now exit for shell fallback.');
+              // This will cause the step to succeed, but no artifact downloaded.
+              // The next step will then attempt the git clone fallback.
               return;
             }
 
             // Find an artifact that likely contains the source (e.g., named 'source-code' or 'archive')
             const sourceArtifact = artifacts.data.artifacts.find(artifact => 
-              artifact.name.includes('source') || artifact.name.includes('archive') || artifact.name.includes('code')
+              artifact.name.includes('source') || artifact.name.includes('archive') || artifact.name.includes('code') || artifact.name.includes('build') // Added 'build' as artifact name
             );
 
             if (!sourceArtifact) {
               console.log('No source-like artifact found. Downloading the first available artifact.');
-              // If specific artifact not found, try to download the first one
               await repos.downloadArtifact({
                 owner,
                 repo,
@@ -81,36 +82,67 @@ jobs:
                 archive_format: 'zip',
               });
             }
-
-            // Extract the downloaded zip file
-            await exec.exec('unzip', ['-o', '*.zip']); // Unzip the downloaded artifact
-            
-            // The artifact will extract into a directory. Find it and move contents.
-            const extractedDirs = fs.readdirSync('.');
-            const sourceDirName = extractedDirs.find(dir => dir.startsWith('systemd-zram-generator-'));
-            if (!sourceDirName) {
-              throw new Error('Could not find extracted source directory from artifact.');
-            }
-            await exec.exec('mv', [`${sourceDirName}/*`, 'systemd-zram-generator-source/']);
-            await exec.exec('rm', ['-rf', sourceDirName]); // Clean up temporary extracted dir
-
-            // Verify
-            if (!fs.existsSync('systemd-zram-generator-source/meson.build')) {
-              throw new Error('meson.build not found in systemd-zram-generator-source after artifact download!');
-            }
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: ${{ github.workspace }} # Perform operations from workspace root
+        working-directory: ${{ github.workspace }} # This is the correct placement for working-directory
+
+      # Step 4: Extract the downloaded artifact or fallback to git clone if no artifact was downloaded
+      - name: Extract Artifact or Fallback to Git Clone
+        # This step runs AFTER the github-script step.
+        # If the github-script step downloaded an artifact, it will be a zip file in the root workspace.
+        # If the github-script step didn't download an artifact (e.g., no artifacts found),
+        # this step will try the git clone as a fallback.
+        run: |
+          EXTRACT_DIR="systemd-zram-generator-source" # Target directory for source
+
+          # Check if a zip artifact was downloaded by the previous step
+          ZIP_FILE=$(find ${{ github.workspace }} -maxdepth 1 -name "*.zip" -print -quit)
+
+          if [ -f "$ZIP_FILE" ]; then
+            echo "Artifact ZIP found: $ZIP_FILE. Extracting..."
+            mkdir -p "$EXTRACT_DIR"
+            unzip -o "$ZIP_FILE" -d "$EXTRACT_DIR"
+            # The ZIP might contain a top-level directory, so move contents up
+            # Find the actual source directory inside the extracted zip if present
+            EXTRACTED_SUBDIR=$(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)
+            if [ -n "$EXTRACTED_SUBDIR" ] && [ -f "$EXTRACTED_SUBDIR/meson.build" ]; then
+              echo "Moving contents from $EXTRACTED_SUBDIR to $EXTRACT_DIR..."
+              mv "$EXTRACTED_SUBDIR"/* "$EXTRACT_DIR"/
+              rm -rf "$EXTRACTED_SUBDIR" # Clean up original extracted subdir
+            fi
+            rm -f "$ZIP_FILE" # Clean up the downloaded zip
+
+            # Verify contents
+            if [ ! -f "$EXTRACT_DIR/meson.build" ]; then
+              echo "ERROR: meson.build not found after artifact extraction! Aborting."
+              exit 1
+            fi
+            echo "Source extracted from artifact."
+          else
+            echo "No artifact ZIP found. Falling back to direct git clone..."
+            # This is the direct git clone fallback.
+            rm -rf "$EXTRACT_DIR" || true # Clean up any previous attempts
+
+            echo "Cloning https://github.com/systemd/systemd-zram-generator.git..."
+            git clone --depth 1 https://github.com/systemd/systemd-zram-generator.git "$EXTRACT_DIR"
+
+            if [ ! -f "$EXTRACT_DIR/meson.build" ]; then
+              echo "ERROR: meson.build NOT found after fallback git clone! Critical failure."
+              ls -lF "$EXTRACT_DIR" # List contents for debug
+              exit 1
+            fi
+            echo "Source cloned via fallback Git."
+          fi
+        working-directory: ${{ github.workspace }} # Perform operations from the workspace root
 
       - name: Install Remaining Build Dependencies (Non-interactive)
-        # This step now operates within the newly populated 'systemd-zram-generator-source' directory.
+        # These dependencies are for the zram-generator project itself.
         working-directory: ./systemd-zram-generator-source
         run: |
           export DEBIAN_FRONTEND=noninteractive
           export TZ="Etc/UTC"
 
           apt update -y
-          # actions/checkout handled git. Install other build tools.
           apt install -y tzdata build-essential meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
@@ -119,7 +151,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:List Contents of systemd-zram-generator-source
+      - name: Debug: Final Check - List Contents of systemd-zram-generator-source
         working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
