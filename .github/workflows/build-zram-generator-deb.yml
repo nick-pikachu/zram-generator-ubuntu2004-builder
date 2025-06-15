@@ -22,39 +22,32 @@ jobs:
 
     steps:
       - name: Checkout systemd-zram-generator source
-        # This step clones the official systemd-zram-generator repository.
-        # If you've forked it, replace the 'repository' value with your fork's path
-        # (e.g., 'your_username/zram-generator').
         uses: actions/checkout@v4
         with:
-          repository: systemd/zram-generator # Clones the original upstream project
-          path: zram-generator-source        # Clones into a subdirectory (inside the container)
+          repository: systemd/zram-generator
+          path: zram-generator-source
 
-      - name: Install Build Dependencies inside Ubuntu 20.04 Container
+      - name: Install Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
         run: |
+          # Set DEBIAN_FRONTEND to noninteractive to prevent interactive prompts
+          export DEBIAN_FRONTEND=noninteractive
+          # Also set a default timezone to prevent tzdata from asking
+          export TZ="Etc/UTC"
+          ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
+          dpkg-reconfigure -f noninteractive tzdata
+
           apt update -y
-          # Essential tools for compiling C projects and building Debian packages
           apt install -y build-essential git meson ninja-build pkg-config libsystemd-dev debhelper devscripts
-          # Clean up apt cache to save space (optional, but good practice in CI)
           apt clean
           rm -rf /var/lib/apt/lists/*
 
       - name: Configure and Build Project
-        working-directory: ./zram-generator-source # Work inside the cloned source directory
+        working-directory: ./zram-generator-source
         run: |
-          # Configure the build system (Meson)
-          # --prefix=/usr ensures it installs to standard system paths later on
           meson setup build --prefix=/usr
-
-          # Compile the project using Ninja
           ninja -C build
 
       - name: Create Debian Package
-        # This step uses the 'debian/' directory from the cloned source
-        # to build the .deb package.
-        # -b: binary-only build (no source package).
-        # -us: skip signing the source package.
-        # -uc: skip signing the .deb package (suitable for internal/private builds).
         working-directory: ./zram-generator-source
         run: |
           # Ensure changelog is updated for the build process (important for dpkg-buildpackage)
@@ -67,9 +60,6 @@ jobs:
       - name: Find .deb package
         id: find_deb
         run: |
-          # The .deb package is usually created one directory up from the build directory,
-          # or in the parent of the directory where dpkg-buildpackage was run.
-          # We'll search the workspace for it.
           DEB_FILE=$(find /__w/${{ github.repository }}/ -name "*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found!"
@@ -82,4 +72,4 @@ jobs:
         with:
           name: systemd-zram-generator-ubuntu2004-deb
           path: ${{ steps.find_deb.outputs.deb_file }}
-          retention-days: 7 # Keep the artifact for 7 days
+          retention-days: 7
