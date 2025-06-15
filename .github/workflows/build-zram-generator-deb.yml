@@ -21,58 +21,31 @@ jobs:
       options: --user root # Ensure commands run as root inside the container
 
     steps:
-      # Step 1: Checkout YOUR workflow repository (always implicitly done)
+      # Step 1: Checkout YOUR workflow repository (where this workflow file lives)
+      # This is automatically done by actions/checkout@v4 at the root of the workspace.
       - name: Checkout Workflow Repository
         uses: actions/checkout@v4
+        # No 'path:' needed here, it goes to the default workspace root.
 
-      # Step 2: Install core tools, including git, in the container
-      - name: Install Core Tools and Git in Container
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt update -y
-          apt install -y git wget tar # Ensure git is available, along with wget/tar
-          apt clean
-          rm -rf /var/lib/apt/lists/*
-
-      # Step 3: Explicitly clone the systemd/systemd-zram-generator C source
-      # We'll clone it, and then check its contents rigorously.
+      # Step 2: Clone the systemd/systemd-zram-generator C source using actions/checkout
+      # This action is designed for robust, authenticated cloning.
       - name: Clone Canonical systemd-zram-generator C source
-        run: |
-          # Clean up any potential previous clone attempts or debris
-          rm -rf ./systemd-zram-generator-source.tmp || true
-          rm -rf ./systemd-zram-generator-source || true
-
-          # Set Git safe.directory for the workspace, critical for actions/checkout in containers
-          # and general git operations on mounted volumes.
-          git config --global --add safe.directory /__w/${{ github.repository }}/${{ github.repository }}
-
-          # Clone into a temporary directory
-          git clone https://github.com/systemd/systemd-zram-generator.git systemd-zram-generator-source.tmp
-
-          # Verify contents of the cloned directory immediately
-          echo "Contents of temporary cloned directory (systemd-zram-generator-source.tmp):"
-          ls -lF ./systemd-zram-generator-source.tmp
-          
-          if [ ! -f "./systemd-zram-generator-source.tmp/meson.build" ]; then
-            echo "ERROR: meson.build NOT found in temporary clone! Listing content again to confirm:"
-            ls -lF ./systemd-zram-generator-source.tmp
-            echo "Attempted to clone: https://github.com/systemd/systemd-zram-generator.git"
-            echo "This is unexpected. Aborting."
-            exit 1
-          fi
-
-          # If successful, move contents to final expected location
-          mv ./systemd-zram-generator-source.tmp ./systemd-zram-generator-source
-        working-directory: ${{ github.workspace }} # Perform clone from the workspace root
+        uses: actions/checkout@v4
+        with:
+          repository: systemd/systemd-zram-generator # The correct upstream repository
+          path: systemd-zram-generator-source        # Clone into this subdirectory
+          token: ${{ secrets.GITHUB_TOKEN }}         # Use the built-in token for authentication
 
       - name: Install Remaining Build Dependencies (Non-interactive)
-        # Now this working directory should contain the C source
+        # These dependencies are for the zram-generator project itself.
+        # This step now operates within the newly cloned 'systemd-zram-generator-source' directory.
         working-directory: ./systemd-zram-generator-source
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          export TZ="Etc/UTC"
+          export TZ="Etc/UTC" # Set default timezone to prevent interactive prompts
 
           apt update -y
+          # Git is implicitly handled by actions/checkout. Install other build tools.
           apt install -y tzdata build-essential meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
@@ -81,17 +54,17 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:Final Check - List Contents of systemd-zram-generator-source
-        working-directory: ./systemd-zram-generator-source
+      - name: Debug:List Contents of systemd-zram-generator-source
+        working-directory: ./systemd-zram-generator-source # Verify files are here
         run: |
           echo "Current working directory (pwd): $(pwd)"
-          echo "Contents of ./systemd-zram-generator-source (FINAL CHECK):"
+          echo "Contents of ./systemd-zram-generator-source:"
           ls -lF
           echo "Full recursive listing:"
           ls -lR . 
 
       - name: Configure and Build Project
-        working-directory: ./systemd-zram-generator-source
+        working-directory: ./systemd-zram-generator-source # Meson should find meson.build here
         run: |
           echo "Current working directory for Meson setup: $(pwd)"
           if [ ! -f "meson.build" ]; then
@@ -99,11 +72,11 @@ jobs:
             ls -lF .
             exit 1
           fi
-          meson setup . build --prefix=/usr
+          meson setup . build --prefix=/usr # Explicitly tell meson source is '.' and build dir is 'build'
           ninja -C build
 
       - name: Create Debian Package
-        working-directory: ./systemd-zram-generator-source
+        working-directory: ./systemd-zram-generator-source # dpkg-buildpackage operates here
         run: |
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
           dpkg-buildpackage -b -us -uc
@@ -111,6 +84,10 @@ jobs:
       - name: Find .deb package
         id: find_deb
         run: |
+          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
+          # Since working-directory for Create Debian Package is './systemd-zram-generator-source',
+          # the .deb will be in the root of the runner's workspace.
+          # The workspace root inside container is typically /__w/<org>/<repo>/
           DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found in root workspace! Trying source dir as fallback."
