@@ -22,6 +22,7 @@ jobs:
 
     steps:
       # Step 1: Checkout YOUR workflow repository (where this workflow file lives)
+      # This is automatically done by actions/checkout@v4 at the root of the workspace.
       - name: Checkout Workflow Repository
         uses: actions/checkout@v4
 
@@ -30,10 +31,9 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt update -y
-          apt install -y unzip git # Install unzip for artifacts, git for fallback clone
+          apt install -y unzip git
           apt clean
           rm -rf /var/lib/apt/lists/*
-          # Crucial for git operations on mounted volumes in containers
           git config --global --add safe.directory /__w/${{ github.repository }}/${{ github.repository }}
 
       # Step 3: Download the source code from a *previous successful run* of systemd/systemd-zram-generator's CI
@@ -69,17 +69,20 @@ jobs:
               artifact_id: artifactToDownload.id,
               archive_format: 'zip',
             });
-            // GitHub Script action automatically extracts content to process.env.GITHUB_WORKSPACE
-            // if archive_format is 'zip'.
             core.setOutput('artifact_downloaded', 'true');
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: ${{ github.workspace }} # Correct placement: option for the step, not part of 'with'
+        # The working-directory applies to the entire step, not inside 'with'.
+        # For actions/github-script, operations happen relative to GITHUB_WORKSPACE
+        # unless explicitly changed within the script itself (e.g., process.chdir()).
+        # Thus, working-directory on this step is not needed or relevant if all paths
+        # are absolute or relative to GITHUB_WORKSPACE.
 
       # Step 4: Extract the downloaded artifact or fallback to git clone if no artifact was downloaded
       - name: Extract Artifact or Fallback to Git Clone
         # This step runs after the github-script step.
         # It checks if the artifact was downloaded or falls back to git clone.
+        working-directory: ${{ github.workspace }} # Ensure this step runs from the workspace root
         run: |
           EXTRACT_DIR="systemd-zram-generator-source" # Target directory for source
           mkdir -p "$EXTRACT_DIR" # Ensure target directory exists
@@ -119,10 +122,8 @@ jobs:
             fi
             echo "Source cloned via fallback Git."
           fi
-        working-directory: ${{ github.workspace }} # This runs from the workspace root
 
       - name: Install Remaining Build Dependencies (Non-interactive)
-        # These dependencies are for the zram-generator project itself.
         working-directory: ./systemd-zram-generator-source # This should now contain the C source
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -137,7 +138,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:Final Check - List Contents of systemd-zram-generator-source
+      - name: Debug: Final Check - List Contents of systemd-zram-generator-source
         working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
@@ -166,18 +167,15 @@ jobs:
 
       - name: Find .deb package
         id: find_deb
+        working-directory: ${{ github.workspace }} # Find from workspace root
         run: |
-          DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "systemd-zram-generator_*.deb" -print -quit)
+          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
+          # Since working-directory for Create Debian Package is './systemd-zram-generator-source',
+          # the .deb will be in the root of the runner's workspace.
+          DEB_FILE=$(find . -maxdepth 1 -name "systemd-zram-generator_*.deb" -print -quit) # Search only in current dir (workspace root)
           if [ -z "$DEB_FILE" ]; then
-            echo "Error: .deb file not found in root workspace! Trying source dir as fallback."
-            DEB_FILE=$(find /__w/${{ github.repository }}/systemd-zram-generator-source/ -name "systemd-zram-generator_*.deb" -print -quit)
-            if [ -z "$DEB_FILE" ]; then
-              echo "Error: .deb file not found anywhere!"
-              exit 1
-            fi
-            echo "Found .deb in source subdirectory (recovered)."
-          else
-            echo "Found .deb in root workspace (expected)."
+            echo "Error: .deb file not found in root workspace! Aborting."
+            exit 1
           fi
           echo "deb_file=$DEB_FILE" >> $GITHUB_OUTPUT
 
