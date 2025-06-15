@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: systemd/zram-generator
-          path: zram-generator-source # Clones into this subdirectory
+          path: zram-generator-source # Clones into this subdirectory relative to GITHUB_WORKSPACE
 
       - name: Install Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
         working-directory: ./zram-generator-source # All commands in this step run inside this directory
@@ -45,9 +45,10 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:List Workspace Contents Before Build
+      - name: Debug: List Workspace Contents Before Build
         working-directory: ./zram-generator-source # Ensure this is correct
         run: |
+          echo "Current working directory (pwd): $(pwd)"
           echo "Contents of current working directory (./zram-generator-source):"
           ls -lF
           echo "Contents of parent directory (root workspace):"
@@ -58,7 +59,14 @@ jobs:
       - name: Configure and Build Project
         working-directory: ./zram-generator-source # Ensure this is correct
         run: |
-          meson setup build --prefix=/usr
+          echo "Current working directory for Meson setup: $(pwd)"
+          # Check for meson.build before running meson setup
+          if [ ! -f "meson.build" ]; then
+            echo "ERROR: meson.build not found in $(pwd)! Listing contents again:"
+            ls -lF .
+            exit 1
+          fi
+          meson setup . build --prefix=/usr # Explicitly tell meson source is '.'
           ninja -C build
 
       - name: Create Debian Package
