@@ -21,34 +21,39 @@ jobs:
       options: --user root # Ensure commands run as root inside the container
 
     steps:
-      # --- NEW STEP: Install Git globally in the container ---
+      # Step 1: Checkout YOUR workflow repository.
+      # This is where your .github/workflows directory resides.
+      # By default, actions/checkout checks out to GITHUB_WORKSPACE (e.g. /__w/user/repo/user/repo)
+      - name: Checkout Workflow Repository
+        uses: actions/checkout@v4
+        # No 'path:' needed here, it goes to the default workspace root.
+
+      # Step 2: Install Git (if not already present in the container image)
+      # This ensures 'git clone' can be executed.
       - name: Install Git in Container
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt update -y
-          apt install -y git # Install git here, before any git clone operations
+          apt install -y git
           apt clean
           rm -rf /var/lib/apt/lists/*
-      # --- END NEW STEP ---
 
-      - name: Checkout your repository (workflow container)
-        uses: actions/checkout@v4
-        with:
-          path: main-repo-checkout # This will be where your .github/workflows lives
-
+      # Step 3: Explicitly clone the systemd/zram-generator C source into a dedicated directory.
       - name: Clone systemd-zram-generator C source
         run: |
           git clone https://github.com/systemd/zram-generator.git zram-generator-source
-        working-directory: ${{ github.workspace }} # Clone into the root of the workspace
+        working-directory: ${{ github.workspace }} # Ensure cloning happens from the workspace root
 
-      - name: Install Remaining Build Dependencies (Non-interactive)
-        working-directory: ./zram-generator-source # Now this working directory should contain the C source
+      - name: Install Remaining Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
+        # These dependencies are for the zram-generator project itself.
+        # This step now operates within the newly cloned 'zram-generator-source' directory.
+        working-directory: ./zram-generator-source
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          export TZ="Etc/UTC"
+          export TZ="Etc/UTC" # Set default timezone to prevent interactive prompts
 
           apt update -y
-          # Git is already installed, so remove it from this line
+          # Git is already installed.
           apt install -y tzdata build-essential meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
@@ -57,49 +62,54 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug:List Workspace Contents Before Build
-        working-directory: ./zram-generator-source
+      - name: Debug: List Contents of zram-generator-source
+        working-directory: ./zram-generator-source # Verify files are here
         run: |
           echo "Current working directory (pwd): $(pwd)"
-          echo "Contents of current working directory (./zram-generator-source):"
+          echo "Contents of ./zram-generator-source:"
           ls -lF
-          echo "Contents of parent directory (root workspace):"
-          ls -lF ../
-          echo "Full recursive listing of zram-generator-source:"
+          echo "Full recursive listing:"
           ls -lR . 
 
       - name: Configure and Build Project
-        working-directory: ./zram-generator-source
+        working-directory: ./zram-generator-source # Meson should find meson.build here
         run: |
           echo "Current working directory for Meson setup: $(pwd)"
           if [ ! -f "meson.build" ]; then
-            echo "ERROR: meson.build still not found in $(pwd)! Critical failure."
+            echo "ERROR: meson.build is still missing! Fatal error. Listing current directory contents:"
             ls -lF .
             exit 1
           fi
-          meson setup . build --prefix=/usr
+          meson setup . build --prefix=/usr # Explicitly tell meson source is '.' and build dir is 'build'
           ninja -C build
 
       - name: Create Debian Package
-        working-directory: ./zram-generator-source
+        working-directory: ./zram-generator-source # dpkg-buildpackage operates here
         run: |
+          # The dch command is expecting to be run from the root of the source tree
+          # where the debian/ directory is located.
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
           dpkg-buildpackage -b -us -uc
 
       - name: Find .deb package
         id: find_deb
         run: |
+          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
+          # Since working-directory for Create Debian Package is './zram-generator-source',
+          # the .deb will be in the root of the runner's workspace.
+          # The workspace root inside container is typically /__w/<org>/<repo>/
           DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
-            echo "Error: .deb file not found in expected root path!"
+            echo "Error: .deb file not found in root workspace! Trying zram-generator-source dir as fallback."
+            # Fallback for older dpkg-buildpackage behavior or different repo layouts
             DEB_FILE=$(find /__w/${{ github.repository }}/zram-generator-source/ -name "systemd-zram-generator_*.deb" -print -quit)
             if [ -z "$DEB_FILE" ]; then
               echo "Error: .deb file not found anywhere!"
               exit 1
             fi
-            echo "Found .deb in zram-generator-source subdirectory (unexpected but recovered)."
+            echo "Found .deb in zram-generator-source subdirectory (recovered)."
           else
-            echo "Found .deb in root workspace."
+            echo "Found .deb in root workspace (expected)."
           fi
           echo "deb_file=$DEB_FILE" >> $GITHUB_OUTPUT
 
