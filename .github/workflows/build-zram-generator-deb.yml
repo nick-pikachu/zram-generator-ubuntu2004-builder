@@ -21,49 +21,56 @@ jobs:
       options: --user root # Ensure commands run as root inside the container
 
     steps:
-      # Step 1: Checkout YOUR workflow repository.
+      # Step 1: Checkout YOUR workflow repository (always implicitly done)
       - name: Checkout Workflow Repository
         uses: actions/checkout@v4
 
-      # Step 2: Install core tools needed for downloading and extracting
-      - name: Install Core Tools (wget, tar) in Container
+      # Step 2: Install core tools, including git, in the container
+      - name: Install Core Tools and Git in Container
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt update -y
-          apt install -y wget tar
+          apt install -y git wget tar # Ensure git is available, along with wget/tar
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      # Step 3: Download and Extract the *CORRECT* systemd-zram-generator C source directly
-      - name: Download and Extract Canonical systemd-zram-generator C source
+      # Step 3: Explicitly clone the systemd/systemd-zram-generator C source
+      # We'll clone it, and then check its contents rigorously.
+      - name: Clone Canonical systemd-zram-generator C source
         run: |
-          # The correct repository is systemd/systemd-zram-generator
-          # Correct URL for downloading main branch tarball from GitHub
-          SOURCE_URL="https://codeload.github.com/systemd/systemd-zram-generator/tar.gz/main"
-          TAR_FILE="systemd-zram-generator-main.tar.gz" # Name the downloaded file
-          EXTRACT_DIR="systemd-zram-generator-source" # Directory where the source will be extracted
+          # Clean up any potential previous clone attempts or debris
+          rm -rf ./systemd-zram-generator-source.tmp || true
+          rm -rf ./systemd-zram-generator-source || true
 
-          echo "Downloading $SOURCE_URL..."
-          wget -O "$TAR_FILE" "$SOURCE_URL"
-          echo "Extracting $TAR_FILE to $EXTRACT_DIR..."
-          # The tarball extracts into a directory like systemd-systemd-zram-generator-main/, so we strip components
-          mkdir -p "$EXTRACT_DIR"
-          tar -xzf "$TAR_FILE" -C "$EXTRACT_DIR" --strip-components=1
+          # Set Git safe.directory for the workspace, critical for actions/checkout in containers
+          # and general git operations on mounted volumes.
+          git config --global --add safe.directory /__w/${{ github.repository }}/${{ github.repository }}
+
+          # Clone into a temporary directory
+          git clone https://github.com/systemd/systemd-zram-generator.git systemd-zram-generator-source.tmp
+
+          # Verify contents of the cloned directory immediately
+          echo "Contents of temporary cloned directory (systemd-zram-generator-source.tmp):"
+          ls -lF ./systemd-zram-generator-source.tmp
           
-          # Verify contents immediately after extraction
-          echo "Contents of extracted source directory ($EXTRACT_DIR):"
-          ls -lF "$EXTRACT_DIR"
-          if [ ! -f "$EXTRACT_DIR/meson.build" ]; then
-            echo "ERROR: meson.build still not found after wget/extract! This is critically unexpected. Exiting."
+          if [ ! -f "./systemd-zram-generator-source.tmp/meson.build" ]; then
+            echo "ERROR: meson.build NOT found in temporary clone! Listing content again to confirm:"
+            ls -lF ./systemd-zram-generator-source.tmp
+            echo "Attempted to clone: https://github.com/systemd/systemd-zram-generator.git"
+            echo "This is unexpected. Aborting."
             exit 1
           fi
-        working-directory: ${{ github.workspace }} # Ensure operations happen from the workspace root
 
-      - name: Install Remaining Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
-        working-directory: ./systemd-zram-generator-source # Now this should contain the C source
+          # If successful, move contents to final expected location
+          mv ./systemd-zram-generator-source.tmp ./systemd-zram-generator-source
+        working-directory: ${{ github.workspace }} # Perform clone from the workspace root
+
+      - name: Install Remaining Build Dependencies (Non-interactive)
+        # Now this working directory should contain the C source
+        working-directory: ./systemd-zram-generator-source
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          export TZ="Etc/UTC" # Set default timezone to prevent interactive prompts
+          export TZ="Etc/UTC"
 
           apt update -y
           apt install -y tzdata build-essential meson ninja-build pkg-config libsystemd-dev debhelper devscripts
@@ -75,7 +82,7 @@ jobs:
           rm -rf /var/lib/apt/lists/*
 
       - name: Debug:Final Check - List Contents of systemd-zram-generator-source
-        working-directory: ./systemd-zram-generator-source # Verify files are here just before build
+        working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory (pwd): $(pwd)"
           echo "Contents of ./systemd-zram-generator-source (FINAL CHECK):"
@@ -84,7 +91,7 @@ jobs:
           ls -lR . 
 
       - name: Configure and Build Project
-        working-directory: ./systemd-zram-generator-source # Meson should find meson.build here
+        working-directory: ./systemd-zram-generator-source
         run: |
           echo "Current working directory for Meson setup: $(pwd)"
           if [ ! -f "meson.build" ]; then
@@ -92,11 +99,11 @@ jobs:
             ls -lF .
             exit 1
           fi
-          meson setup . build --prefix=/usr # Explicitly tell meson source is '.' and build dir is 'build'
+          meson setup . build --prefix=/usr
           ninja -C build
 
       - name: Create Debian Package
-        working-directory: ./systemd-zram-generator-source # dpkg-buildpackage operates here
+        working-directory: ./systemd-zram-generator-source
         run: |
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
           dpkg-buildpackage -b -us -uc
@@ -104,10 +111,6 @@ jobs:
       - name: Find .deb package
         id: find_deb
         run: |
-          # The .deb package is created in the parent directory of where dpkg-buildpackage was invoked.
-          # Since working-directory for Create Debian Package is './systemd-zram-generator-source',
-          # the .deb will be in the root of the runner's workspace.
-          # The workspace root inside container is typically /__w/<org>/<repo>/
           DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 2 -name "systemd-zram-generator_*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
             echo "Error: .deb file not found in root workspace! Trying source dir as fallback."
