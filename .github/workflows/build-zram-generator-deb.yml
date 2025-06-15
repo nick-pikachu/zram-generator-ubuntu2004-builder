@@ -62,7 +62,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug: List Contents of zram-generator-source
+      - name: Debug:List Contents of zram-generator-source
         working-directory: ./zram-generator-source # Verify files are here
         run: |
           echo "Current working directory (pwd): $(pwd)"
