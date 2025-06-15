@@ -41,15 +41,15 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const { repos } = github.rest;
+            // Correct API path is github.rest.actions
+            const { actions } = github.rest;
             const owner = 'systemd';
             const repo = 'systemd-zram-generator';
             const run_id = 9243760431; // *** CRITICAL: REPLACE THIS WITH A REAL workflow_run_id ***
-                                    // Example: Go to https://github.com/systemd/systemd-zram-generator/actions
-                                    // Pick a "CI" run, click it, and get the ID from the URL (e.g., .../runs/123456789)
 
             console.log(`Fetching workflow run artifacts for run_id: ${run_id}`);
-            const artifacts = await repos.listWorkflowRunArtifacts({ owner, repo, run_id });
+            // Correct function call
+            const artifacts = await actions.listWorkflowRunArtifacts({ owner, repo, run_id });
 
             if (!artifacts.data.artifacts || artifacts.data.artifacts.length === 0) {
               console.log('No artifacts found for this run. Setting output to indicate no download.');
@@ -64,15 +64,16 @@ jobs:
             const artifactToDownload = sourceArtifact || artifacts.data.artifacts[0]; // Fallback to first if specific not found
 
             console.log(`Downloading artifact: ${artifactToDownload.name} (ID: ${artifactToDownload.id})`);
-            const download = await repos.downloadArtifact({
+            // Correct function call for downloading artifact
+            const download = await actions.downloadArtifact({
               owner,
               repo,
               artifact_id: artifactToDownload.id,
               archive_format: 'zip',
             });
             core.setOutput('artifact_downloaded', 'true');
-        env: # Correct indentation: env is a property of the step, not the 'with' block
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Step 4: Extract the downloaded artifact or fallback to git clone if no artifact was downloaded
       - name: Extract Artifact or Fallback to Git Clone
