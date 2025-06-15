@@ -55,7 +55,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug: List Workspace Contents Before Build
+      - name: Debug:List Workspace Contents Before Build
         working-directory: ./zram-generator-source # This should now list the C project files
         run: |
           echo "Current working directory (pwd): $(pwd)"
