@@ -45,7 +45,7 @@ jobs:
           apt clean
           rm -rf /var/lib/apt/lists/*
 
-      - name: Debug: List Workspace Contents Before Build
+      - name: Debug:List Workspace Contents Before Build
         working-directory: ./zram-generator-source # Ensure this is correct
         run: |
           echo "Current working directory (pwd): $(pwd)"
