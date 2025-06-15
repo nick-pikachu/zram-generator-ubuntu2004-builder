@@ -25,9 +25,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: systemd/zram-generator
-          path: zram-generator-source
+          path: zram-generator-source # Clones into a subdirectory (inside the container)
 
       - name: Install Build Dependencies inside Ubuntu 20.04 Container (Non-interactive)
+        # All commands in this step now run inside the 'zram-generator-source' directory
+        working-directory: ./zram-generator-source
         run: |
           # Set DEBIAN_FRONTEND to noninteractive to prevent interactive prompts
           export DEBIAN_FRONTEND=noninteractive
@@ -35,11 +37,9 @@ jobs:
           export TZ="Etc/UTC"
 
           apt update -y
-          # Install tzdata first to ensure it's present for reconfigure
-          # Then install other build dependencies
           apt install -y tzdata build-essential git meson ninja-build pkg-config libsystemd-dev debhelper devscripts
           
-          # Now reconfigure tzdata in non-interactive mode after it's installed
+          # Reconfigure tzdata in non-interactive mode after it's installed
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
           dpkg-reconfigure -f noninteractive tzdata
 
@@ -47,13 +47,13 @@ jobs:
           rm -rf /var/lib/apt/lists/*
 
       - name: Configure and Build Project
-        working-directory: ./zram-generator-source
+        working-directory: ./zram-generator-source # Ensure this is explicitly set
         run: |
           meson setup build --prefix=/usr
           ninja -C build
 
       - name: Create Debian Package
-        working-directory: ./zram-generator-source
+        working-directory: ./zram-generator-source # Ensure this is explicitly set
         run: |
           dch --create --package systemd-zram-generator --newversion 1.0.0-${GITHUB_RUN_NUMBER} "GitHub Actions build for Ubuntu 20.04."
           dpkg-buildpackage -b -us -uc
@@ -61,10 +61,21 @@ jobs:
       - name: Find .deb package
         id: find_deb
         run: |
-          DEB_FILE=$(find /__w/${{ github.repository }}/ -name "*.deb" -print -quit)
+          # The .deb package is created in the parent directory of where dpkg-buildpackage was run.
+          # Since dpkg-buildpackage runs in './zram-generator-source', the .deb will be in the
+          # root of the workspace.
+          DEB_FILE=$(find /__w/${{ github.repository }}/ -maxdepth 1 -name "*.deb" -print -quit)
           if [ -z "$DEB_FILE" ]; then
-            echo "Error: .deb file not found!"
-            exit 1
+            echo "Error: .deb file not found in root workspace!"
+            # Fallback for older dpkg-buildpackage behavior or different repo layouts
+            DEB_FILE=$(find /__w/${{ github.repository }}/zram-generator-source/ -name "*.deb" -print -quit)
+            if [ -z "$DEB_FILE" ]; then
+              echo "Error: .deb file not found anywhere within zram-generator-source!"
+              exit 1
+            fi
+            echo "Found .deb in zram-generator-source subdirectory."
+          else
+            echo "Found .deb in root workspace."
           fi
           echo "deb_file=$DEB_FILE" >> $GITHUB_OUTPUT
 
